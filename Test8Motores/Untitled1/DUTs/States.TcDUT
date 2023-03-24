@@ -1,0 +1,22 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<TcPlcObject Version="1.1.0.1" ProductVersion="3.1.4024.9">
+  <DUT Name="States" Id="{d04e3668-c687-4493-acb3-0bc833cea6d9}">
+    <Declaration><![CDATA[{attribute 'qualified_only'}
+{attribute 'strict'}
+TYPE States :
+(
+	Reset := 0,
+	Init,
+	Enable,
+	bLocal,
+	MoveType,
+	Error,
+	Absolute,
+	Relative,
+	Velocity,
+	Stop
+);
+END_TYPE
+]]></Declaration>
+  </DUT>
+</TcPlcObject>

@@ -1,0 +1,209 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<TcPlcObject Version="1.1.0.1" ProductVersion="3.1.4024.9">
+  <POU Name="MAIN" Id="{86679b08-6d78-4646-b50c-b94e5d23f676}" SpecialFunc="None">
+    <Declaration><![CDATA[PROGRAM MAIN
+VAR
+	Motor 					: ARRAY [1..4] OF FB_MOTOR;
+	Simu 					: ARRAY [1..4] OF FB_SIM_MOTOR;
+	sNames 					: ARRAY [1..4] OF STRING;
+	State 					: ARRAY [1..4] OF States;
+	previousState 			: ARRAY [1..4] OF States;
+	bReset 			AT %I*	: ARRAY [1..4] OF BOOL;
+	sMessage 		AT %I*	: ARRAY [1..4] OF STRING;
+	bMove 			AT %I*	: ARRAY [1..4] OF BOOL;
+	sMovType 		AT %I*	: ARRAY [1..4] OF STRING;
+	lrPosition 		AT %I*	: ARRAY [1..4] OF LREAL;
+	lrVelocity 		AT %I*	: ARRAY [1..4] OF LREAL;
+	
+	index					: INT;
+	iNumber 				: INT;
+
+	a: INT :=1;
+	bStop: ARRAY [1..4] OF BOOL;
+END_VAR
+]]></Declaration>
+    <Implementation>
+      <ST><![CDATA[// Iniciamos los motores y sus simuladores
+FOR index:=1 TO 4 DO
+	sNames[index] := CONCAT('Motor', INT_TO_STRING(index));
+	Motor[index](sName:=sNames[index], nNOVRAM_DevId:=0);
+	Simu[index](ptrCfg:=ADR(Motor[index].cfg), ptrStat:=ADR(Motor[index].stat));
+END_FOR
+
+FOR iNumber := 1 TO 4 DO
+	ACT_Mot();
+END_FOR
+
+//iNumber := 1;
+//ACT_Mot();
+
+]]></ST>
+    </Implementation>
+    <Action Name="ACT_Mot" Id="{b8938c25-71e1-4140-baf5-76aca7db3f11}">
+      <Implementation>
+        <ST><![CDATA[// Debido a que este código se basa en comandos RPC debemos poder parar su ejecución en cualquier momento
+// si se activa el modo de control local
+IF Motor[iNumber].stat.bLocal THEN
+	previousState[iNumber] := State[iNumber];
+	State[iNumber] := States.bLocal;
+END_IF
+
+IF bReset[iNumber] THEN
+	State[iNumber] := States.Reset;
+END_IF
+
+CASE State[iNumber] OF
+	
+	States.bLocal :
+		// Esperamos hasta que se desactiva el control local y volvemos al estado en el que nos encontrábamos.
+		IF NOT Motor[iNumber].stat.bLocal THEN
+			State[iNumber] := previousState[iNumber];
+		END_IF
+	
+	States.Error :
+		// En caso de error imprimimos el error en pantalla y esperamos a que el usuario nos de el OK para hacer un reset
+		sMessage[iNumber] := CONCAT('Motor error: ', Motor[iNumber].stat.sErrorText);
+		IF bReset[iNumber] THEN
+			State[iNumber] := States.Reset;
+		END_IF
+		
+	States.Stop :
+		// En caso de solicitud de stop paramos el motor y volvemos al estado de espera de movimiento
+		Motor[iNumber].RPC_Stop();
+		State[iNumber] := States.MoveType;
+		
+	States.Reset :
+		// Hacemos el reset y pasamos al estado de init
+		Motor[iNumber].RPC_Reset();
+		State[iNumber] := States.Init;
+		bReset[iNumber] := FALSE;
+	
+	States.Init :
+		// Ejecutamos el init y pasamos al estado de enable
+		Motor[iNumber].RPC_Init();
+		State[iNumber] := States.Enable;
+		
+	States.Enable :
+		// Esperamos a que acabe la inicialización para realizar el enamble y pasar al siguiente estado
+		IF Motor[iNumber].stat.bInitialised THEN
+			Motor[iNumber].RPC_Enable();
+			State[iNumber] := States.MoveType;
+		// En caso de error durante el init pasamos al estado de reset
+		ELSIF Motor[iNumber].stat.nStatus = E_MOTOR_STATUS.ERROR THEN
+			State[iNumber] := States.Error;
+		END_IF
+		
+	States.MoveType :
+		// Comprobamos que no se haya producido ningún error en el movimiento anterior
+		IF Motor[iNumber].stat.nStatus = E_MOTOR_STATUS.ERROR THEN
+			State[iNumber] := States.Error;
+		ELSE
+			IF bStop[iNumber] THEN
+				State[iNumber] := States.Stop;
+				bStop[iNumber] := FALSE;
+			// Esperamos a que el usuario active el movimiento para leer qué tipo de movimiento quiere hacer
+			ELSIF bMove[iNumber] THEN
+				bMove[iNumber] := FALSE;
+				IF sMovType[iNumber] = 'Abs' THEN
+					State[inumber] := States.Absolute;
+					sMessage[iNumber] := '';             // En caso de que hubiese algún mensaje de tipo de movimiento erróneo anterior lo reseteamos
+				ELSIF sMovType[iNumber] = 'Rel' THEN
+					State[inumber] := States.Relative;
+					sMessage[iNumber] := '';
+				ELSIF sMovType[iNumber] = 'Vel' THEN
+					State[inumber] := States.Velocity;
+					sMessage[iNumber] := '';
+				ELSE 
+					sMessage[iNumber] := 'Wrong movement type input';
+				END_IF
+			END_IF
+		END_IF
+		
+	States.Absolute :
+		// Ejecutamos el movimiento absoluto
+		Motor[iNumber].RPC_MoveAbs(in_lrPos := lrPosition[iNumber], in_lrVel := lrVelocity[iNumber]);
+		State[iNumber] := States.MoveType;
+		
+	States.Relative :
+		// Ejecutamos el movimiento relativo
+		Motor[iNumber].RPC_MoveRel(in_lrPos := lrPosition[iNumber], in_lrVel := lrVelocity[iNumber]);
+		State[iNumber] := States.MoveType;
+		
+	States.Velocity :
+		// Ejecutamos el movimiento en velocidad
+		Motor[iNumber].RPC_MoveVel(in_lrVel := lrVelocity[iNumber]);
+		State[iNumber] := States.MoveType;
+		
+END_CASE]]></ST>
+      </Implementation>
+    </Action>
+    <LineIds Name="MAIN">
+      <LineId Id="54" Count="5" />
+      <LineId Id="62" Count="0" />
+      <LineId Id="60" Count="0" />
+      <LineId Id="103" Count="0" />
+      <LineId Id="64" Count="0" />
+      <LineId Id="172" Count="0" />
+      <LineId Id="83" Count="1" />
+      <LineId Id="61" Count="0" />
+      <LineId Id="2" Count="0" />
+    </LineIds>
+    <LineIds Name="MAIN.ACT_Mot">
+      <LineId Id="11" Count="0" />
+      <LineId Id="57" Count="0" />
+      <LineId Id="10" Count="0" />
+      <LineId Id="14" Count="0" />
+      <LineId Id="12" Count="1" />
+      <LineId Id="120" Count="0" />
+      <LineId Id="117" Count="2" />
+      <LineId Id="3" Count="0" />
+      <LineId Id="2" Count="0" />
+      <LineId Id="15" Count="5" />
+      <LineId Id="58" Count="2" />
+      <LineId Id="64" Count="0" />
+      <LineId Id="8" Count="0" />
+      <LineId Id="62" Count="1" />
+      <LineId Id="124" Count="4" />
+      <LineId Id="61" Count="0" />
+      <LineId Id="4" Count="0" />
+      <LineId Id="52" Count="0" />
+      <LineId Id="65" Count="0" />
+      <LineId Id="33" Count="0" />
+      <LineId Id="132" Count="0" />
+      <LineId Id="21" Count="0" />
+      <LineId Id="40" Count="4" />
+      <LineId Id="22" Count="2" />
+      <LineId Id="45" Count="0" />
+      <LineId Id="25" Count="0" />
+      <LineId Id="46" Count="0" />
+      <LineId Id="28" Count="0" />
+      <LineId Id="31" Count="0" />
+      <LineId Id="26" Count="0" />
+      <LineId Id="66" Count="1" />
+      <LineId Id="84" Count="0" />
+      <LineId Id="86" Count="2" />
+      <LineId Id="121" Count="1" />
+      <LineId Id="131" Count="0" />
+      <LineId Id="90" Count="1" />
+      <LineId Id="130" Count="0" />
+      <LineId Id="92" Count="1" />
+      <LineId Id="115" Count="0" />
+      <LineId Id="94" Count="1" />
+      <LineId Id="114" Count="0" />
+      <LineId Id="96" Count="1" />
+      <LineId Id="113" Count="0" />
+      <LineId Id="98" Count="2" />
+      <LineId Id="89" Count="0" />
+      <LineId Id="85" Count="0" />
+      <LineId Id="81" Count="2" />
+      <LineId Id="101" Count="2" />
+      <LineId Id="105" Count="2" />
+      <LineId Id="104" Count="0" />
+      <LineId Id="69" Count="0" />
+      <LineId Id="109" Count="2" />
+      <LineId Id="108" Count="0" />
+      <LineId Id="112" Count="0" />
+      <LineId Id="5" Count="0" />
+    </LineIds>
+  </POU>
+</TcPlcObject>
